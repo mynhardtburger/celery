@@ -202,7 +202,7 @@ def delta_resolution(dt: datetime, delta: timedelta) -> datetime:
 
 
 def remaining(
-        start: datetime, ends_in: timedelta, now: Callable | None = None,
+        start: datetime, ends_in: timedelta, now: datetime | None = None,
         relative: bool = False) -> timedelta:
     """Calculate the remaining time for a start date and a timedelta.
 
@@ -277,7 +277,7 @@ def yearmonth(name: str) -> int:
 
 
 def humanize_seconds(
-        secs: int, prefix: str = '', sep: str = '', now: str = 'now',
+        secs: float, prefix: str = '', sep: str = '', now: str = 'now',
         microseconds: bool = False) -> str:
     """Show seconds in human form.
 
