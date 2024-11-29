@@ -14,15 +14,13 @@ from calendar import timegm
 from datetime import datetime
 from functools import total_ordering
 from threading import Event, Thread
-from typing import Any, Callable, Iterator, Literal, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal, NamedTuple, TypeVar
 
 from billiard import ensure_multiprocessing
 from billiard.common import reset_signals
 from billiard.context import Process
 from kombu.utils.functional import maybe_evaluate, reprcall
 from kombu.utils.objects import cached_property
-
-from celery import Celery
 
 from . import __version__, platforms, signals
 from .exceptions import reraise
@@ -31,6 +29,12 @@ from .utils.functional import is_numeric_value
 from .utils.imports import load_extension_class_names, symbol_by_name
 from .utils.log import get_logger, iter_open_logger_fds
 from .utils.time import humanize_seconds, maybe_make_aware
+
+if TYPE_CHECKING:
+    import kombu
+
+    from celery import Celery
+
 
 __all__ = (
     'SchedulingError', 'ScheduleEntry', 'Scheduler',
@@ -128,8 +132,8 @@ class ScheduleEntry:
     total_run_count = 0
 
     def __init__(self, name=None, task=None, last_run_at: datetime | None = None,
-                 total_run_count=None, schedule=None, args=(), kwargs=None,
-                 options=None, relative=False, app: Celery = None):
+                 total_run_count: int | None = None, schedule=None, args=(), kwargs=None,
+                 options=None, relative=False, app: Celery | None = None):
         self.app = app
         self.name = name
         self.task = task
@@ -246,7 +250,7 @@ class Scheduler:
     Entry = ScheduleEntry
 
     #: The schedule dict/shelve.
-    schedule: shelve.Shelf[ScheduleEntry] = None
+    schedule: shelve.Shelf[ScheduleEntry] | None = None
 
     #: Maximum time to sleep between re-checking the schedule.
     max_interval = DEFAULT_MAX_INTERVAL
@@ -263,22 +267,23 @@ class Scheduler:
     logger = logger  # compat
 
     def __init__(self, app: Celery, schedule=None, max_interval=None,
-                 Producer=None, lazy=False, sync_every_tasks: int = None, **kwargs):
+                 Producer: kombu.Producer | None = None, lazy=False,
+                 sync_every_tasks: int | None = None, **kwargs) -> None:
         self.app: Celery = app
         self.data: shelve.Shelf[ScheduleEntry] = maybe_evaluate({} if schedule is None else schedule)
         self.max_interval: float = (max_interval or
                                     app.conf.beat_max_loop_interval or
                                     self.max_interval)
-        self.Producer = Producer or app.amqp.Producer
-        self._heap: list[EventT] = None
-        self.old_schedulers: shelve.Shelf[ScheduleEntry] = None
+        self.Producer: kombu.Producer = Producer or app.amqp.Producer
+        self._heap: list[EventT] | None = None
+        self.old_schedulers: shelve.Shelf[ScheduleEntry] | None = None
         self.sync_every_tasks: int = (
             app.conf.beat_sync_every if sync_every_tasks is None
             else sync_every_tasks)
         if not lazy:
             self.setup_schedule()
 
-    def install_default_entries(self, data: shelve.Shelf[ScheduleEntry]):
+    def install_default_entries(self, data: shelve.Shelf[ScheduleEntry]) -> None:
         entries = {}
         if self.app.conf.result_expires and \
                 not self.app.backend.supports_autoexpire:
@@ -289,7 +294,7 @@ class Scheduler:
                     'options': {'expires': 12 * 3600}}
         self.update_from_dict(entries)
 
-    def apply_entry(self, entry, producer=None):
+    def apply_entry(self, entry: ScheduleEntry, producer: kombu.Producer | None = None) -> None:
         info('Scheduler: Sending due task %s (%s)', entry.name, entry.task)
         try:
             result = self.apply_async(entry, producer=producer, advance=False)
@@ -325,7 +330,7 @@ class Scheduler:
                       heapify: Callable[[list[Any]], None] = heapq.heapify) -> None:
         """Populate the heap with the data contained in the schedule."""
         priority = 5
-        self._heap: list[EventT] = []
+        self._heap = []
         for entry in self.schedule.values():
             is_due, next_call_delay = entry.is_due()
             self._heap.append(event_t(
@@ -408,7 +413,8 @@ class Scheduler:
         new_entry = self.schedule[entry.name] = next(entry)
         return new_entry
 
-    def apply_async(self, entry: ScheduleEntry, producer=None, advance=True, **kwargs):
+    def apply_async(self, entry: ScheduleEntry, producer: kombu.Producer | None = None,
+                    advance=True, **kwargs):
         # Update time-stamps and run counts before we actually execute,
         # so we have that done if an exception is raised (doesn't schedule
         # forever.)
@@ -505,7 +511,7 @@ class Scheduler:
 
     def set_schedule(self, schedule: shelve.Shelf[ScheduleEntry]) -> None:
         self.data = schedule
-    schedule: shelve.Shelf[ScheduleEntry] = property(get_schedule, set_schedule)
+    schedule = property(get_schedule, set_schedule)
 
     @cached_property
     def connection(self):
